@@ -423,10 +423,10 @@ class TestMCPComponentCache(ComponentTestBaseWithoutClient):
 
     @pytest.mark.asyncio
     @pytest.mark.usefixtures("administrator_user")
-    async def test_cache_persistence_across_instances(
+    async def test_cache_persistence_across_instances_in_same_session(
         self, component_class, default_kwargs, mock_tools_list, mock_server_config, active_user
     ):
-        """Test that cache persists across component instances."""
+        """Test that cache persists across component instances within the same session."""
         server_name = "test_server"
         shared_tenant_id = str(active_user.id)
 
@@ -448,6 +448,7 @@ class TestMCPComponentCache(ComponentTestBaseWithoutClient):
         # Second component instance
         component2 = await self.component_setup(component_class, default_kwargs)
         component2._user_id = shared_tenant_id
+        component2.graph.session_id = component1.graph.session_id
         component2.use_cache = True
 
         # Should access the same cache

@@ -173,7 +173,7 @@ class TestTtlToolCacheIsolation(ComponentTestBaseWithoutClient):
 
     @pytest.mark.asyncio
     async def test_sequential_invocation_copies_reuse_cached_tools(self, component_class, default_kwargs) -> None:
-        component = component_class(**default_kwargs, mcp_server={"name": "srv"}, headers=[])
+        component = component_class(**default_kwargs, _session_id="session", mcp_server={"name": "srv"}, headers=[])
         first_invocation = deepcopy(component)
         second_invocation = deepcopy(component)
         tools = [_make_tool("cached")]
@@ -193,7 +193,7 @@ class TestGetToolsTtlCache:
 
     @pytest.mark.asyncio
     async def test_ttl_cache_hit_skips_update_tool_list(self) -> None:
-        component = MCPToolsComponent()
+        component = MCPToolsComponent(_session_id="session")
         component.mcp_server = {"name": "srv"}
         component.headers = []
 
@@ -211,7 +211,7 @@ class TestGetToolsTtlCache:
 
     @pytest.mark.asyncio
     async def test_ttl_cache_expired_entry_is_refetched(self) -> None:
-        component = MCPToolsComponent()
+        component = MCPToolsComponent(_session_id="session")
         component.mcp_server = {"name": "srv"}
         component.headers = []
 
@@ -234,7 +234,7 @@ class TestGetToolsTtlCache:
 
     @pytest.mark.asyncio
     async def test_ttl_cache_bounded_by_max_entries_fifo(self) -> None:
-        component = MCPToolsComponent()
+        component = MCPToolsComponent(_session_id="session")
         # Shrink the cap for a fast, deterministic FIFO check.
         component.TOOL_TTL_MAX_ENTRIES = 3
 
@@ -258,7 +258,7 @@ class TestGetToolsTtlCache:
 
     @pytest.mark.asyncio
     async def test_ttl_cache_disabled_when_ttl_is_zero(self) -> None:
-        component = MCPToolsComponent()
+        component = MCPToolsComponent(_session_id="session")
         component.TOOL_TTL_SECS = 0
         component.mcp_server = {"name": "srv"}
         component.headers = []

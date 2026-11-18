@@ -121,6 +121,10 @@ class MCPToolsComponent(ComponentWithCache):
     def __deepcopy__(self, memo: dict) -> MCPToolsComponent:
         """Keep the per-component tool cache available to isolated invocation copies."""
         component_copy = cast("MCPToolsComponent", super().__deepcopy__(memo))
+        # Invocation copies have no vertex. Keep the current execution scope rather
+        # than the possibly stale session captured by the component constructor.
+        component_copy._session_id = self._mcp_cache_session_id()  # noqa: SLF001
+        component_copy._user_id = self._mcp_cache_user_id()  # noqa: SLF001
         # Component tools are deep-copied for every invocation to isolate mutable inputs.
         # Those copies belong to the same component execution lineage, so sharing this
         # bounded, auth-scoped cache preserves its TTL without exposing it to independently
@@ -169,8 +173,8 @@ class MCPToolsComponent(ComponentWithCache):
     def _mcp_servers_cache_key(self, server_name: str) -> str:
         """Cache key for shared servers map.
 
-        Includes the authenticated user, headers, and timeout so tenant/auth/tweak/timeout
-        changes get distinct entries.
+        Includes the session, authenticated user, headers, and timeout so different
+        sessions and client settings get distinct entries for each server.
         """
         if not server_name:
             return ""
@@ -190,9 +194,13 @@ class MCPToolsComponent(ComponentWithCache):
         if user_id:
             cache_data["user_id"] = user_id
 
-        # Preserve the compact per-instance TTL key when there is no authenticated user.
-        # Shared caching is disabled for that case in ``update_tool_list`` below.
-        if not hdrs and normalized_timeout == 0.0 and not user_id:
+        session_id = self._mcp_cache_session_id()
+        if session_id:
+            cache_data["session_id"] = session_id
+
+        # Preserve the compact key for metadata contexts without an execution scope.
+        # Tool-list caching is disabled when there is no session.
+        if not hdrs and normalized_timeout == 0.0 and not user_id and not session_id:
             return server_name
 
         payload = json.dumps(cache_data, sort_keys=True)
@@ -235,6 +243,11 @@ class MCPToolsComponent(ComponentWithCache):
             graph = getattr(getattr(self, "_vertex", None), "graph", None)
             user_id = getattr(graph, "user_id", None)
         return str(user_id) if user_id else None
+
+    def _mcp_cache_session_id(self) -> str | None:
+        """Use the current graph session, or the standalone component session."""
+        session_id = getattr(self.graph, "session_id", None)
+        return str(session_id) if session_id else None
 
     def _build_tool_output(self) -> Output:
         # Do not cache Toolset output. This is separate from the MCP "Use Cached Server" (use_cache)
@@ -461,11 +474,11 @@ class MCPToolsComponent(ComponentWithCache):
         # captured a previous credential snapshot.
         bound_variables = await self._account_bound_variables()
 
-        # Check if caching is enabled, default to False. The cross-request cache must never
-        # be used without an authenticated tenant scope; the per-instance TTL cache remains
-        # available in standalone/UI contexts.
+        # Cross-request reuse requires both an authenticated user and a session.
         use_cache = getattr(self, "use_cache", False) and bound_variables is None
-        use_shared_cache = use_cache and self._mcp_cache_user_id() is not None
+        use_shared_cache = (
+            use_cache and self._mcp_cache_user_id() is not None and self._mcp_cache_session_id() is not None
+        )
         header_keys = sorted(self._normalized_headers_for_cache().keys())
         await logger.adebug(
             "MCP update_tool_list: start server=%r use_cache=%s use_shared_cache=%s shared_cache_key=%r header_keys=%s",
@@ -855,7 +868,9 @@ class MCPToolsComponent(ComponentWithCache):
 
                 # Get use_cache setting to determine if we should use cached data
                 use_cache = getattr(self, "use_cache", False)
-                has_shared_cache_scope = self._mcp_cache_user_id() is not None
+                has_shared_cache_scope = (
+                    self._mcp_cache_user_id() is not None and self._mcp_cache_session_id() is not None
+                )
                 use_shared_cache = use_cache and has_shared_cache_scope
 
                 # Fast path: if server didn't change and we already have options, keep them as-is
@@ -1282,7 +1297,7 @@ class MCPToolsComponent(ComponentWithCache):
 
         bound_variables = await self._account_bound_variables()
         ttl = self.TOOL_TTL_SECS if bound_variables is None else 0
-        ttl_key = self._mcp_servers_cache_key(srv or "") if ttl > 0 and srv else ""
+        ttl_key = self._mcp_servers_cache_key(srv) if ttl > 0 and srv and self._mcp_cache_session_id() else ""
 
         # TTL cache lookup + expired-entry eviction.
         if ttl > 0 and ttl_key:
